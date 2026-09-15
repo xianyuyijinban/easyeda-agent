@@ -1054,7 +1054,7 @@ func findSilkscreenFlipped(silk []pcbSilkText) []pcbCheckFinding {
 				Type: "silkscreen-flipped", Level: "ERROR", Layer: s.Layer, Designator: label,
 				Primitives: []string{s.ID}, At: &pcbXY{round2(s.X), round2(s.Y)},
 				Message: fmt.Sprintf("silkscreen text '%s' on the %s silk is %s — it reads backwards (放反)",
-					label, sideName(s.Layer), reason) + docRule("11.2", "底层丝印需镜像"),
+					label, sideName(s.Layer), reason) + docRule("11.2", "丝印须清晰可辨"),
 			})
 			continue
 		}

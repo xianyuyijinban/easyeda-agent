@@ -447,7 +447,7 @@ func TestPcbCheck_SilkDesignatorOrientation(t *testing.T) {
 	}
 }
 
-// A mirrored/reversed top-silk text reads backwards → ERROR.
+// A reversed top-silk text reads backwards → ERROR.
 func TestPcbCheck_SilkReversed(t *testing.T) {
 	silk := []pcbSilkText{
 		{ID: "s1", Kind: "attribute", Key: "Designator", Text: "R9", Layer: silkTopLayer, Reverse: true},
