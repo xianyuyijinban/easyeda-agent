@@ -980,12 +980,22 @@ func findParallelCoupling(tracks []pcbTrack, couplingW float64) []pcbCheckFindin
 //  1. side mismatch — a component's designator sits on the OPPOSITE silk layer from
 //     its footprint (component on TOP but its designator on BOTTOM_SILKSCREEN, or
 //     vice-versa). The label ends up on the wrong side of the board.
-//  2. mirror mismatch — the text's mirror flag doesn't match its silk layer. Top
-//     silk must read un-mirrored; bottom silk must be mirrored (so it reads
-//     correctly when the board is viewed from the bottom). Either way wrong = the
-//     text renders backwards.
+//  2. mirror mismatch — the text carries an explicit mirror/reverse flag, which
+//     double-applies the flip the side already provides. The polarity matters:
+//     EasyEDA's own side handling renders bottom-silk text correctly with the
+//     flag CLEAR, so the defect signal is the flag being SET, not absent.
+//     Measured across JLCEDA's open-source reference boards
+//     (testdata/boards/lckfb-*.json): 1814 of 1814 bottom-silk texts — both
+//     component attributes and free strings — carry mirror=false. An earlier
+//     version of this rule required mirror=true on the bottom silk and flagged
+//     ~1800 false ERRORs across those same boards (391 on the ESP32-S3 anchor,
+//     which docs/test-case-esp32-chip-n8r8.md gates at silkscreen-flipped == 0).
 //
-// Free strings (no parent component) only get the mirror check.
+//     Reverse (left/right reading) is always a defect — it mirrors glyph order
+//     regardless of which side the text is on.
+//
+// Note this check cannot see a text that is merely mis-positioned; it only reads
+// the text's own flags.
 func findSilkscreenFlipped(silk []pcbSilkText) []pcbCheckFinding {
 	sideName := func(l int) string {
 		switch l {
@@ -1005,8 +1015,9 @@ func findSilkscreenFlipped(silk []pcbSilkText) []pcbCheckFinding {
 		if label == "" {
 			label = s.ID
 		}
+		compOwned := s.Kind == "attribute" && (s.CompLayer == pcbSideTop || s.CompLayer == pcbSideBottom)
 		// 1. designator on the wrong silk side vs its component.
-		if s.Kind == "attribute" && (s.CompLayer == pcbSideTop || s.CompLayer == pcbSideBottom) {
+		if compOwned {
 			wantSilk := silkTopLayer
 			if s.CompLayer == pcbSideBottom {
 				wantSilk = silkBottomLayer
@@ -1021,21 +1032,14 @@ func findSilkscreenFlipped(silk []pcbSilkText) []pcbCheckFinding {
 				continue
 			}
 		}
-		// 2. mirror/reverse doesn't match the silk layer → text reads backwards.
-		//    Top silk must read un-flipped; bottom silk must be flipped (so it reads
-		//    right viewed from the bottom). Either Mirror or Reverse = flipped.
-		flipped := s.Mirror || s.Reverse
-		wantFlipped := s.Layer == silkBottomLayer
-		if flipped != wantFlipped {
-			state := "mirrored/reversed"
-			if !flipped {
-				state = "un-mirrored"
-			}
+		// 2. an explicit mirror/reverse flag double-applies the side's own flip →
+		//    the text renders backwards. Reverse is a defect on either side.
+		if s.Mirror || s.Reverse {
 			out = append(out, pcbCheckFinding{
 				Type: "silkscreen-flipped", Level: "ERROR", Layer: s.Layer, Designator: label,
 				Primitives: []string{s.ID}, At: &pcbXY{round2(s.X), round2(s.Y)},
-				Message: fmt.Sprintf("silkscreen text '%s' on the %s silk is %s — it reads backwards (放反)",
-					label, sideName(s.Layer), state) + docRule("11.2", "底层丝印需镜像"),
+				Message: fmt.Sprintf("silkscreen text '%s' on the %s silk is mirrored/reversed — it reads backwards (放反)",
+					label, sideName(s.Layer)) + docRule("11.2", "底层丝印需镜像"),
 			})
 			continue
 		}

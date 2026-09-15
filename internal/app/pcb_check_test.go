@@ -1,6 +1,8 @@
 package app
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -234,8 +236,8 @@ func TestPcbCheck_TrackOverPad(t *testing.T) {
 }
 
 // Silkscreen orientation: a top-side designator on the bottom silk (side
-// mismatch), a top-silk label that is mirrored (reads backwards), and a correct
-// bottom-side part (bottom silk + mirrored) that must NOT trip.
+// mismatch), a mirrored top-silk label (reads backwards), and correct bottom-side
+// parts that must NOT trip.
 func TestPcbCheck_SilkscreenFlipped(t *testing.T) {
 	// R1 on TOP but its designator got flipped onto the bottom silk → side mismatch.
 	sideMismatch := []pcbSilkText{
@@ -251,16 +253,79 @@ func TestPcbCheck_SilkscreenFlipped(t *testing.T) {
 	if got := countType(analyzePcbCheckFull(nil, nil, nil, nil, backwards, 0), "silkscreen-flipped"); got != 1 {
 		t.Fatalf("mirrored-top = %d, want 1", got)
 	}
-	// Correct states: top part / top silk / un-mirrored, AND a bottom part / bottom
-	// silk / mirrored. Neither is flipped.
+	// Free label on BOTTOM silk is fine with no flag — EasyEDA's own side handling
+	// renders bottom-silk text correctly without an explicit mirror (JLCEDA's
+	// reference boards ship blue-bottom text this way).
+	freeBottom := []pcbSilkText{
+		{ID: "s2", Kind: "string", Text: "SER NO", Layer: 4, Mirror: false},
+	}
+	if got := countType(analyzePcbCheckFull(nil, nil, nil, nil, freeBottom, 0), "silkscreen-flipped"); got != 0 {
+		t.Fatalf("un-mirrored-free-bottom = %d, want 0", got)
+	}
+	// Correct states: top part / top silk; bottom part / bottom silk; free strings on
+	// either side — all with NO mirror flag. None is flipped.
 	ok := []pcbSilkText{
 		{ID: "a1", Kind: "attribute", Text: "U1", Layer: 3, Mirror: false, CompID: "c1", CompLayer: 1},
-		{ID: "a2", Kind: "attribute", Text: "U2", Layer: 4, Mirror: true, CompID: "c2", CompLayer: 2},
+		{ID: "a2", Kind: "attribute", Text: "U2", Layer: 4, Mirror: false, CompID: "c2", CompLayer: 2},
 		{ID: "s1", Kind: "string", Text: "LOGO", Layer: 3, Mirror: false},
+		{ID: "s2", Kind: "string", Text: "SN", Layer: 4, Mirror: false},
 	}
 	rep := analyzePcbCheckFull(nil, nil, nil, nil, ok, 0)
 	if got := countType(rep, "silkscreen-flipped"); got != 0 {
 		t.Fatalf("correct silk = %d, want 0 (findings: %+v)", got, rep.Findings)
+	}
+}
+
+// An explicit mirror flag double-applies the side's own flip — a real defect on
+// either silk layer, for component attributes and free strings alike.
+func TestPcbCheck_SilkExplicitMirrorIsFlipped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    pcbSilkText
+	}{
+		{"owned-bottom", pcbSilkText{ID: "a1", Kind: "attribute", Key: "Footprint", Text: "C0402", Layer: 4, Mirror: true, CompID: "c1", CompLayer: 2}},
+		{"owned-top", pcbSilkText{ID: "a2", Kind: "attribute", Key: "Designator", Text: "R1", Layer: 3, Mirror: true, CompID: "c2", CompLayer: 1}},
+		{"free-bottom", pcbSilkText{ID: "s1", Kind: "string", Text: "SN", Layer: 4, Mirror: true}},
+	} {
+		rep := analyzePcbCheckFull(nil, nil, nil, nil, []pcbSilkText{tc.s}, 0)
+		if got := countType(rep, "silkscreen-flipped"); got != 1 {
+			t.Fatalf("%s: silkscreen-flipped = %d, want 1 (findings: %+v)", tc.name, got, rep.Findings)
+		}
+	}
+}
+
+// Regression: the JLCEDA open-source boards used as layout-score anchors must not
+// be hit by the mirror half of this rule. Before the fix, requiring mirror=true on
+// bottom silk fired 391/841/582 false ERRORs on these three (the ESP32-S3 board is
+// gated at silkscreen-flipped==0 in docs/test-case-esp32-chip-n8r8.md).
+//
+// The assertion counts only the mirror/reverse findings: the rule's third mode
+// (a designator rotated off 0° → WARN) legitimately fires on these shipped boards
+// and is out of scope here.
+func TestPcbCheck_OfficialBoardsNoSilkMirrorFalsePositive(t *testing.T) {
+	for _, file := range []string{
+		"lckfb-szpi-esp32s3.json",
+		"lckfb-k230-canmv.json",
+		"lckfb-rk3568-4layer.json",
+	} {
+		raw, err := os.ReadFile(goldenBoardsDir + "/" + file)
+		if err != nil {
+			t.Skipf("no fixture %s (%v)", file, err)
+		}
+		var snap boardSnapshot
+		if err := json.Unmarshal(raw, &snap); err != nil {
+			t.Fatalf("%s: parse fixture: %v", file, err)
+		}
+		rep := analyzePcbCheckFull(nil, nil, nil, nil, snap.Silk, 0)
+		mirrorErrs := 0
+		for _, f := range rep.Findings {
+			if f.Type == "silkscreen-flipped" && f.Level == "ERROR" {
+				mirrorErrs++
+			}
+		}
+		if mirrorErrs != 0 {
+			t.Fatalf("%s silkscreen-flipped mirror ERRORs = %d, want 0", file, mirrorErrs)
+		}
 	}
 }
 
