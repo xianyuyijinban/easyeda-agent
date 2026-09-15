@@ -303,21 +303,30 @@ func TestPcbCheck_SilkMirrorAndReverse(t *testing.T) {
 // The assertion counts only mirror/reverse ERRORs — the rule's third mode (a
 // designator rotated off 0° → WARN) legitimately fires on these shipped boards and
 // is out of scope here.
+//
+// A missing fixture is a FAILURE, not a skip: these are required vendored
+// regression inputs, and skipping would silently turn the coverage into a green
+// no-op (same rationale as the golden-board suite in pcb_layoutscore_golden_test.go).
 func TestPcbCheck_OfficialBoardsNoSilkFalsePositive(t *testing.T) {
-	for _, file := range []string{
+	boards := []string{
 		"lckfb-szpi-esp32s3.json",
 		"lckfb-k230-canmv.json",
 		"lckfb-rk3568-4layer.json",
 		"bbclaw-ai-voice-terminal.json",
 		"lckfb-mipi-3in1-adapter.json",
-	} {
+	}
+	checked := 0
+	for _, file := range boards {
 		raw, err := os.ReadFile(goldenBoardsDir + "/" + file)
 		if err != nil {
-			t.Skipf("no fixture %s (%v)", file, err)
+			t.Fatalf("required reference board %s unreadable: %v — a missing fixture must not turn this regression into a green skip", file, err)
 		}
 		var snap boardSnapshot
 		if err := json.Unmarshal(raw, &snap); err != nil {
 			t.Fatalf("%s: parse fixture: %v", file, err)
+		}
+		if len(snap.Silk) == 0 {
+			t.Fatalf("%s has no silkscreen texts — the fixture stopped exercising this rule", file)
 		}
 		rep := analyzePcbCheckFull(nil, nil, nil, nil, snap.Silk, 0)
 		errs := 0
@@ -329,6 +338,10 @@ func TestPcbCheck_OfficialBoardsNoSilkFalsePositive(t *testing.T) {
 		if errs != 0 {
 			t.Fatalf("%s silkscreen-flipped ERRORs = %d, want 0", file, errs)
 		}
+		checked++
+	}
+	if checked != len(boards) {
+		t.Fatalf("checked %d of %d reference boards — the loop did not exercise every fixture", checked, len(boards))
 	}
 }
 
